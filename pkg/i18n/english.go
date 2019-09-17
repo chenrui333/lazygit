@@ -484,11 +484,20 @@ func addEnglish(i18nObject *i18n.Bundle) error {
 			ID:    "FileStagingRequirements",
 			Other: `Can only stage individual lines for tracked files with unstaged changes`,
 		}, &i18n.Message{
-			ID:    "StageHunk",
-			Other: `stage hunk`,
+			ID:    "SelectHunk",
+			Other: `select hunk`,
 		}, &i18n.Message{
-			ID:    "StageLine",
-			Other: `stage line`,
+			ID:    "StageSelection",
+			Other: `stage selection`,
+		}, &i18n.Message{
+			ID:    "ResetSelection",
+			Other: `reset selection`,
+		}, &i18n.Message{
+			ID:    "ToggleDragSelect",
+			Other: `toggle drag select`,
+		}, &i18n.Message{
+			ID:    "ToggleSelectHunk",
+			Other: `toggle select hunk`,
 		}, &i18n.Message{
 			ID:    "EscapeStaging",
 			Other: `return to files panel`,

@@ -83,11 +83,27 @@ type Gui struct {
 // non-mutative, so that we don't accidentally end up
 // with mismatches of data. We might change this in the future
 type stagingPanelState struct {
-	SelectedLine   int
-	StageableLines []int
-	HunkStarts     []int
-	Diff           string
+	SelectedLine       int
+	StageableLines     []int
+	HunkStarts         []int
+	Diff               string
+	SelectingLineRange bool
+	SelectingHunk      bool
+	FirstLine          int
+	LastLine           int
 }
+
+// type stagingPanelSplit struct {
+// 	SelectedLine   int
+// 	StageableLines []int
+// 	HunkStarts     []int
+// 	Diff           string
+// }
+
+// type stagingPanelState struct {
+// 	WorkingTree *stagingPanelSplit
+// 	Index       *stagingPanelSplit
+// }
 
 type mergingPanelState struct {
 	ConflictIndex int
@@ -147,6 +163,7 @@ type guiState struct {
 	WorkingTreeState    string // one of "merging", "rebasing", "normal"
 	Contexts            map[string]string
 	CherryPickedCommits []*commands.Commit
+	SplitMainPanel      bool
 }
 
 // NewGui builds a new gui handler
@@ -376,7 +393,12 @@ func (gui *Gui) layout(g *gocui.Gui) error {
 	g.DeleteView("limit")
 
 	textColor := theme.GocuiDefaultTextColor
-	v, err := g.SetView("main", leftSideWidth+panelSpacing, 0, width-1, height-2, gocui.LEFT)
+	panelSplitX := width - 1
+	if gui.State.SplitMainPanel {
+		panelSplitX = 2 * width / 3
+	}
+
+	v, err := g.SetView("main", leftSideWidth+panelSpacing, 0, panelSplitX, height-2, gocui.LEFT)
 	if err != nil {
 		if err.Error() != "unknown view" {
 			return err
@@ -384,6 +406,20 @@ func (gui *Gui) layout(g *gocui.Gui) error {
 		v.Title = gui.Tr.SLocalize("DiffTitle")
 		v.Wrap = true
 		v.FgColor = textColor
+	}
+
+	hiddenViewOffset := 0
+	if !gui.State.SplitMainPanel {
+		hiddenViewOffset = 9999
+	}
+	mainRight, err := g.SetView("mainRight", panelSplitX+1+hiddenViewOffset, hiddenViewOffset, width-1+hiddenViewOffset, height-2+hiddenViewOffset, gocui.LEFT)
+	if err != nil {
+		if err.Error() != "unknown view" {
+			return err
+		}
+		mainRight.Title = gui.Tr.SLocalize("DiffTitle")
+		mainRight.Wrap = true
+		mainRight.FgColor = gocui.ColorWhite
 	}
 
 	if v, err := g.SetView("status", 0, 0, leftSideWidth, vHeights["status"]-1, gocui.BOTTOM|gocui.RIGHT); err != nil {
