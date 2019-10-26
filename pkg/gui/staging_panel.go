@@ -319,8 +319,7 @@ func (gui *Gui) applySelection(reverse bool) error {
 		return err
 	}
 
-	diffParser := git.NewPatchGenerator(gui.Log, file.Name, state.Diff)
-	patch := diffParser.GeneratePatch(state.FirstLine, state.LastLine, reverse)
+	patch := git.GeneratePatchFromDiff(gui.Log, file.Name, state.Diff, state.FirstLine, state.LastLine, reverse)
 
 	// for logging purposes
 	ioutil.WriteFile("patch.diff", []byte(patch), 0600)
