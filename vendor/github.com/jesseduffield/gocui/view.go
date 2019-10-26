@@ -218,7 +218,7 @@ func (v *View) Cursor() (x, y int) {
 // or decrementing ox and oy.
 func (v *View) SetOrigin(x, y int) error {
 	if x < 0 || y < 0 {
-		return errors.New("invalid point")
+		return nil // swallowing because it does not matter if this fails
 	}
 	v.ox = x
 	v.oy = y

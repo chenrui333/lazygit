@@ -2,11 +2,9 @@ package gui
 
 import (
 	"io/ioutil"
-	"strings"
 
 	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/git"
-	"github.com/jesseduffield/lazygit/pkg/utils"
 )
 
 func (gui *Gui) refreshStagingPanel() error {
@@ -39,29 +37,42 @@ func (gui *Gui) refreshStagingPanel() error {
 		return nil
 	}
 
-	var selectedLine int
-	if gui.State.Panels.Staging != nil {
-		end := len(patchParser.StageableLines) - 1
-		if end < gui.State.Panels.Staging.SelectedLine {
-			selectedLine = end
-		} else {
-			selectedLine = gui.State.Panels.Staging.SelectedLine
-		}
-	} else {
-		selectedLine = 0
-	}
-
 	if len(patchParser.StageableLines) == 0 {
 		return gui.handleStagingEscape(gui.g, nil)
+	}
+
+	var selectedLine int
+	var firstLine int
+	var lastLine int
+	selectingHunk := false
+	state := gui.State.Panels.Staging
+	if state != nil {
+		if state.SelectingHunk {
+			// this is tricky: we need to find out which hunk we just staged based on our old `state.PatchParser` (as opposed to the new `patchParser`)
+			// we do this by getting the first line index of the original hunk, then
+			// finding the next stageable line, then getting its containing hunk
+			// in the new diff
+			selectingHunk = true
+			prevNewHunk := state.PatchParser.GetHunkContainingLine(state.SelectedLine, 0)
+			selectedLine = patchParser.GetNextStageableLineIndex(prevNewHunk.FirstLineIndex)
+			newHunk := patchParser.GetHunkContainingLine(selectedLine, 0)
+			firstLine, lastLine = newHunk.FirstLineIndex, newHunk.LastLineIndex
+		} else {
+			selectedLine = patchParser.GetNextStageableLineIndex(state.SelectedLine)
+			firstLine, lastLine = selectedLine, selectedLine
+		}
+	} else {
+		selectedLine = patchParser.StageableLines[0]
+		firstLine, lastLine = selectedLine, selectedLine
 	}
 
 	gui.State.Panels.Staging = &stagingPanelState{
 		PatchParser:        patchParser,
 		SelectedLine:       selectedLine,
 		SelectingLineRange: false,
-		SelectingHunk:      false,
-		FirstLine:          patchParser.StageableLines[selectedLine],
-		LastLine:           patchParser.StageableLines[selectedLine],
+		SelectingHunk:      selectingHunk,
+		FirstLine:          firstLine,
+		LastLine:           lastLine,
 		Diff:               diff,
 	}
 
@@ -87,101 +98,70 @@ func (gui *Gui) handleStagingEscape(g *gocui.Gui, v *gocui.View) error {
 }
 
 func (gui *Gui) handleStagingPrevLine(g *gocui.Gui, v *gocui.View) error {
-	return gui.handleCycleLine(true)
+	return gui.handleCycleLine(-1)
 }
 
 func (gui *Gui) handleStagingNextLine(g *gocui.Gui, v *gocui.View) error {
-	return gui.handleCycleLine(false)
+	return gui.handleCycleLine(1)
 }
 
 func (gui *Gui) handleStagingPrevHunk(g *gocui.Gui, v *gocui.View) error {
-	return gui.handleCycleHunk(true)
+	return gui.handleCycleHunk(-1)
 }
 
 func (gui *Gui) handleStagingNextHunk(g *gocui.Gui, v *gocui.View) error {
-	return gui.handleCycleHunk(false)
+	return gui.handleCycleHunk(1)
 }
 
-func (gui *Gui) handleCycleHunk(prev bool) error {
+func (gui *Gui) handleCycleHunk(change int) error {
 	state := gui.State.Panels.Staging
-	lineNumbers := state.PatchParser.StageableLines
-	currentLine := lineNumbers[state.SelectedLine]
-	currentHunkIndex := utils.PrevIndex(state.PatchParser.HunkStarts, currentLine)
-	var newHunkIndex int
-	if prev {
-		if currentHunkIndex == 0 {
-			return nil
-		}
-		newHunkIndex = currentHunkIndex - 1
+	newHunk := state.PatchParser.GetHunkContainingLine(state.SelectedLine, change)
+	state.SelectedLine = state.PatchParser.GetNextStageableLineIndex(newHunk.FirstLineIndex)
+	if state.SelectingHunk {
+		state.FirstLine, state.LastLine = newHunk.FirstLineIndex, newHunk.LastLineIndex
 	} else {
-		if currentHunkIndex == len(state.PatchParser.HunkStarts)-1 {
-			return nil
-		}
-		newHunkIndex = currentHunkIndex + 1
+		state.FirstLine, state.LastLine = state.SelectedLine, state.SelectedLine
 	}
 
-	state.SelectedLine = utils.NextIndex(lineNumbers, state.PatchParser.HunkStarts[newHunkIndex])
+	if err := gui.refreshView(); err != nil {
+		return err
+	}
 
-	return gui.refreshView()
+	return gui.focusSelection(true)
 }
 
-func (gui *Gui) handleCycleLine(prev bool) error {
+func (gui *Gui) handleCycleLine(change int) error {
 	state := gui.State.Panels.Staging
 
 	if state.SelectingHunk {
-		if prev {
-			if state.FirstLine == state.PatchParser.HunkStarts[0] {
-				return nil
-			}
-			state.FirstLine, state.LastLine = gui.getHunkRange(state.FirstLine - 1)
-		} else {
-			if state.LastLine >= gui.diffLength() {
-				return nil
-			}
-			// state.LastLine is the last line in the hunk so we'll just get the next line after that
-			state.FirstLine, state.LastLine = gui.getHunkRange(state.LastLine + 1)
-		}
-
-		// get first stageable line in hunk to set as the selectedLine
-		for index, lineIdx := range state.PatchParser.StageableLines {
-			if lineIdx >= state.FirstLine {
-				state.SelectedLine = index
-				break
-			}
-		}
-
-		return gui.refreshView()
+		return gui.handleCycleHunk(change)
 	}
 
-	lineNumbers := state.PatchParser.StageableLines
-	currentLine := lineNumbers[state.SelectedLine]
-	var newIndex int
-	if prev {
-		newIndex = utils.PrevIndex(lineNumbers, currentLine)
-	} else {
-		newIndex = utils.NextIndex(lineNumbers, currentLine)
+	newSelectedLine := state.SelectedLine + change
+	if newSelectedLine < 0 {
+		newSelectedLine = 0
+	} else if newSelectedLine > len(state.PatchParser.PatchLines)-1 {
+		newSelectedLine = len(state.PatchParser.PatchLines) - 1
 	}
-	state.SelectedLine = newIndex
-	newCurrentLine := lineNumbers[state.SelectedLine]
+
+	state.SelectedLine = newSelectedLine
 
 	if state.SelectingLineRange {
-		if newCurrentLine < state.FirstLine {
-			state.FirstLine = newCurrentLine
+		if state.SelectedLine < state.FirstLine {
+			state.FirstLine = state.SelectedLine
 		} else {
-			state.LastLine = newCurrentLine
+			state.LastLine = state.SelectedLine
 		}
 	} else {
-		state.LastLine = newCurrentLine
-		state.FirstLine = newCurrentLine
+		state.LastLine = state.SelectedLine
+		state.FirstLine = state.SelectedLine
 	}
 
-	return gui.refreshView()
-}
+	if err := gui.refreshView(); err != nil {
+		return err
+	}
 
-func (gui *Gui) diffLength() int {
-	state := gui.State.Panels.Staging
-
-	return strings.Count(state.Diff, "\n")
+	return gui.focusSelection(false)
 }
 
 func (gui *Gui) refreshView() error {
@@ -197,68 +177,48 @@ func (gui *Gui) refreshView() error {
 		return gui.setViewContent(gui.g, gui.getMainView(), colorDiff)
 	})
 
-	return gui.focusLineAndHunk()
+	return nil
 }
 
-// focusLineAndHunk works out the best focus for the staging panel given the
+// focusSelection works out the best focus for the staging panel given the
 // selected line and size of the hunk
-func (gui *Gui) focusLineAndHunk() error {
+func (gui *Gui) focusSelection(includeCurrentHunk bool) error {
 	stagingView := gui.getMainView()
 	state := gui.State.Panels.Staging
-
-	lineNumber := state.PatchParser.StageableLines[state.SelectedLine]
 
 	_, viewHeight := stagingView.Size()
 	bufferHeight := viewHeight - 1
 	_, origin := stagingView.Origin()
 
+	firstLine := state.SelectedLine
+	lastLine := state.SelectedLine
+
+	if includeCurrentHunk {
+		hunk := state.PatchParser.GetHunkContainingLine(state.SelectedLine, 0)
+		firstLine = hunk.FirstLineIndex
+		lastLine = hunk.LastLineIndex
+	}
+
+	margin := 0 // we may want to have a margin in place to show context  but right now I'm thinking we keep this at zero
+
 	var newOrigin int
-	if lineNumber-origin < 3 {
-		newOrigin = lineNumber - 3
-	} else if lineNumber-origin > bufferHeight-3 {
-		newOrigin = lineNumber - bufferHeight + 3
+	if firstLine-origin < margin {
+		newOrigin = firstLine - margin
+	} else if lastLine-origin > bufferHeight-margin {
+		newOrigin = lastLine - bufferHeight + margin
 	} else {
 		newOrigin = origin
 	}
 
-	if err := stagingView.SetOrigin(0, newOrigin); err != nil {
-		return err
-	}
+	gui.g.Update(func(*gocui.Gui) error {
+		if err := stagingView.SetOrigin(0, newOrigin); err != nil {
+			return err
+		}
 
-	if err := stagingView.SetCursor(0, lineNumber-newOrigin); err != nil {
-		return err
-	}
+		return stagingView.SetCursor(0, state.SelectedLine-newOrigin)
+	})
 
 	return nil
-
-	// // we want the bottom line of the view buffer to ideally be the bottom line
-	// // of the hunk, but if the hunk is too big we'll just go three lines beyond
-	// // the currently selected line so that the user can see the context
-	// var bottomLine int
-	// nextHunkStartIndex := utils.NextIndex(state.PatchParser.HunkStarts, lineNumber)
-	// if nextHunkStartIndex == 0 {
-	// 	// for now linesHeight is an efficient means of getting the number of lines
-	// 	// in the patch. However if we introduce word wrap we'll need to update this
-	// 	bottomLine = stagingView.LinesHeight() - 1
-	// } else {
-	// 	bottomLine = state.PatchParser.HunkStarts[nextHunkStartIndex] - 1
-	// }
-
-	// hunkStartIndex := utils.PrevIndex(state.PatchParser.HunkStarts, lineNumber)
-	// hunkStart := state.PatchParser.HunkStarts[hunkStartIndex]
-	// // if it's the first hunk we'll also show the diff header
-	// if hunkStartIndex == 0 {
-	// 	hunkStart = 0
-	// }
-
-	// _, height := stagingView.Size()
-	// // if this hunk is too big, we will just ensure that the user can at least
-	// // see three lines of context below the cursor
-	// if bottomLine-hunkStart > height {
-	// 	bottomLine = lineNumber + 3
-	// }
-
-	// return gui.generalFocusLine(lineNumber, bottomLine, stagingView)
 }
 
 func (gui *Gui) handleStageSelection(g *gocui.Gui, v *gocui.View) error {
@@ -272,9 +232,6 @@ func (gui *Gui) handleResetSelection(g *gocui.Gui, v *gocui.View) error {
 func (gui *Gui) applySelection(reverse bool) error {
 	state := gui.State.Panels.Staging
 
-	state.SelectingLineRange = false
-	state.SelectingHunk = false
-
 	file, err := gui.getSelectedFile(gui.g)
 	if err != nil {
 		return err
@@ -285,12 +242,18 @@ func (gui *Gui) applySelection(reverse bool) error {
 	// for logging purposes
 	ioutil.WriteFile("patch.diff", []byte(patch), 0600)
 
+	if patch == "" {
+		return nil
+	}
+
 	// apply the patch then refresh this panel
 	// create a new temp file with the patch, then call git apply with that patch
 	_, err = gui.GitCommand.ApplyPatch(patch, false, !reverse)
 	if err != nil {
 		return err
 	}
+
+	state.SelectingLineRange = false
 
 	if err := gui.refreshFiles(); err != nil {
 		return err
@@ -303,11 +266,10 @@ func (gui *Gui) applySelection(reverse bool) error {
 
 func (gui *Gui) handleToggleSelectRange(g *gocui.Gui, v *gocui.View) error {
 	state := gui.State.Panels.Staging
-	lineNumber := state.PatchParser.StageableLines[state.SelectedLine]
 	state.SelectingLineRange = !state.SelectingLineRange
 	state.SelectingHunk = false
-	state.FirstLine = lineNumber
-	state.LastLine = lineNumber
+	state.FirstLine = state.SelectedLine
+	state.LastLine = state.SelectedLine
 
 	return gui.refreshView()
 }
@@ -317,35 +279,18 @@ func (gui *Gui) handleToggleSelectHunk(g *gocui.Gui, v *gocui.View) error {
 
 	state.SelectingHunk = !state.SelectingHunk
 	state.SelectingLineRange = false
-	lineNumber := state.PatchParser.StageableLines[state.SelectedLine]
 
 	// if we're no longer selecting a hunk, reset the line number and refresh
 	if !state.SelectingHunk {
-		state.FirstLine, state.LastLine = lineNumber, lineNumber
+		state.FirstLine, state.LastLine = state.SelectedLine, state.SelectedLine
 	} else {
-		state.FirstLine, state.LastLine = gui.getHunkRange(lineNumber)
+		selectedHunk := state.PatchParser.GetHunkContainingLine(state.SelectedLine, 0)
+		state.FirstLine, state.LastLine = selectedHunk.FirstLineIndex, selectedHunk.LastLineIndex
 	}
 
-	return gui.refreshView()
-}
-
-func (gui *Gui) getHunkRange(lineNumber int) (int, int) {
-	state := gui.State.Panels.Staging
-
-	hunkStart := -1
-	hunkEnd := -1
-	for index, start := range state.PatchParser.HunkStarts {
-		if lineNumber < start {
-			continue
-		} else {
-			hunkStart = start
-			if len(state.PatchParser.HunkStarts) > index+1 {
-				hunkEnd = state.PatchParser.HunkStarts[index+1] - 1
-			} else {
-				hunkEnd = gui.diffLength()
-			}
-		}
+	if err := gui.refreshView(); err != nil {
+		return err
 	}
 
-	return hunkStart, hunkEnd
+	return gui.focusSelection(state.SelectingHunk)
 }

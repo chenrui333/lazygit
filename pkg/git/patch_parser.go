@@ -29,6 +29,7 @@ type PatchLine struct {
 type PatchParser struct {
 	Log            *logrus.Entry
 	PatchLines     []*PatchLine
+	PatchHunks     []*PatchHunk
 	HunkStarts     []int
 	StageableLines []int // rename to mention we're talking about indexes
 }
@@ -40,23 +41,56 @@ func NewPatchParser(log *logrus.Entry, patch string) (*PatchParser, error) {
 		return nil, err
 	}
 
+	patchHunks := GetHunksFromDiff(patch)
+
 	return &PatchParser{
 		Log:            log,
-		HunkStarts:     hunkStarts,
+		HunkStarts:     hunkStarts, // deprecated
 		StageableLines: stageableLines,
 		PatchLines:     patchLines,
+		PatchHunks:     patchHunks,
 	}, nil
 }
 
+// GetHunkContainingLine takes a line index and an offset and finds the hunk
+// which contains the line index, then returns the hunk considering the offset.
+// e.g. if the offset is 1 it will return the next hunk.
+func (p *PatchParser) GetHunkContainingLine(lineIndex int, offset int) *PatchHunk {
+	if len(p.PatchHunks) == 0 {
+		return nil
+	}
+
+	for index, hunk := range p.PatchHunks {
+		if lineIndex >= hunk.FirstLineIndex && lineIndex <= hunk.LastLineIndex {
+			resultIndex := index + offset
+			if resultIndex < 0 {
+				resultIndex = 0
+			} else if resultIndex > len(p.PatchHunks)-1 {
+				resultIndex = len(p.PatchHunks) - 1
+			}
+			return p.PatchHunks[resultIndex]
+		}
+	}
+
+	// if your cursor is past the last hunk, select the last hunk
+	if lineIndex > p.PatchHunks[len(p.PatchHunks)-1].LastLineIndex {
+		return p.PatchHunks[len(p.PatchHunks)-1]
+	}
+
+	// otherwise select the first
+	return p.PatchHunks[0]
+}
+
 func (l *PatchLine) render(selected bool) string {
-	if len(l.Content) == 0 {
-		return ""
+	content := l.Content
+	if len(content) == 0 {
+		content = " " // using the space so that we can still highlight if necessary
 	}
 
 	// for hunk headers we need to start off cyan and then use white for the message
 	if l.Kind == HUNK_HEADER {
 		re := regexp.MustCompile("(@@.*?@@)(.*)")
-		match := re.FindStringSubmatch(l.Content)
+		match := re.FindStringSubmatch(content)
 		return coloredString(color.FgCyan, match[1], selected) + coloredString(theme.DefaultTextColor, match[2], selected)
 	}
 
@@ -72,7 +106,7 @@ func (l *PatchLine) render(selected bool) string {
 		colorAttr = theme.DefaultTextColor
 	}
 
-	return coloredString(colorAttr, l.Content, selected)
+	return coloredString(colorAttr, content, selected)
 }
 
 func coloredString(colorAttr color.Attribute, str string, selected bool) string {
@@ -130,4 +164,16 @@ func (p *PatchParser) Render(firstLineIndex int, lastLineIndex int) string {
 		renderedLines[index] = patchLine.render(selected)
 	}
 	return strings.Join(renderedLines, "\n")
+}
+
+// GetNextStageableLineIndex takes a line index and returns the line index of the next stageable line
+// note this will actually include the current index if it is stageable
+func (p *PatchParser) GetNextStageableLineIndex(currentIndex int) int {
+	for _, lineIndex := range p.StageableLines {
+		if lineIndex >= currentIndex {
+			return lineIndex
+			break
+		}
+	}
+	return p.StageableLines[len(p.StageableLines)-1]
 }

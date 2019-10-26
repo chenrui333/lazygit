@@ -11,18 +11,18 @@ import (
 
 var headerRegexp = regexp.MustCompile("(?m)^@@ -(\\d+)[^\\+]+\\+(\\d+)[^@]+@@(.*)$")
 
-type patchHunk struct {
+type PatchHunk struct {
 	oldStart       int
 	oldLength      int
 	newStart       int
 	newLength      int
 	heading        string
-	firstLineIndex int
-	lastLineIndex  int
+	FirstLineIndex int
+	LastLineIndex  int
 	bodyLines      []string
 }
 
-func newHunk(header string, body string, firstLineIndex int) *patchHunk {
+func newHunk(header string, body string, firstLineIndex int) *PatchHunk {
 	match := headerRegexp.FindStringSubmatch(header)
 	oldStart := mustConvertToInt(match[1])
 	newStart := mustConvertToInt(match[2])
@@ -30,21 +30,21 @@ func newHunk(header string, body string, firstLineIndex int) *patchHunk {
 
 	bodyLines := withoutEmptyStrings(strings.SplitAfter(header+body, "\n"))[1:] // dropping the header line
 
-	return &patchHunk{
+	return &PatchHunk{
 		oldStart:       oldStart,
 		newStart:       newStart,
 		heading:        heading,
-		firstLineIndex: firstLineIndex,
-		lastLineIndex:  firstLineIndex + len(bodyLines),
+		FirstLineIndex: firstLineIndex,
+		LastLineIndex:  firstLineIndex + len(bodyLines),
 		bodyLines:      bodyLines,
 	}
 }
 
-func (hunk *patchHunk) updateLinesForRange(reverse bool, firstLineIndex int, lastLineIndex int) {
+func (hunk *PatchHunk) updateLinesForRange(reverse bool, firstLineIndex int, lastLineIndex int) {
 	skippedIndex := -1
 	newLines := []string{}
 
-	lineIndex := hunk.firstLineIndex
+	lineIndex := hunk.FirstLineIndex
 	for _, line := range hunk.bodyLines {
 		lineIndex++ // incrementing here because our lines don't include the header line
 		firstChar, content := line[:1], line[1:]
@@ -82,11 +82,11 @@ func (hunk *patchHunk) updateLinesForRange(reverse bool, firstLineIndex int, las
 	hunk.bodyLines = newLines
 }
 
-func (hunk *patchHunk) formatHeader(oldLength int, newLength int) string {
+func (hunk *PatchHunk) formatHeader(oldLength int, newLength int) string {
 	return fmt.Sprintf("@@ -%d,%d +%d,%d @@%s\n", hunk.oldStart, oldLength, hunk.newStart, newLength, hunk.heading)
 }
 
-func (hunk *patchHunk) updatedHeader(startOffset int, reverse bool) (int, string, bool) {
+func (hunk *PatchHunk) updatedHeader(startOffset int, reverse bool) (int, string, bool) {
 	additions := 0
 	deletions := 0
 	contexts := 0
@@ -150,7 +150,7 @@ func mustConvertToInt(s string) int {
 	return i
 }
 
-func getHunksFromDiff(diff string) []*patchHunk {
+func GetHunksFromDiff(diff string) []*PatchHunk {
 	headers := headerRegexp.FindAllString(diff, -1)
 	bodies := headerRegexp.Split(diff, -1)[1:] // discarding top bit
 
@@ -161,7 +161,7 @@ func getHunksFromDiff(diff string) []*patchHunk {
 		}
 	}
 
-	hunks := make([]*patchHunk, len(headers))
+	hunks := make([]*PatchHunk, len(headers))
 	for index, header := range headers {
 		hunks[index] = newHunk(header, bodies[index], headerFirstLineIndices[index])
 	}
@@ -172,22 +172,22 @@ func getHunksFromDiff(diff string) []*patchHunk {
 type PatchGenerator struct {
 	Log      *logrus.Entry
 	filename string
-	hunks    []*patchHunk
+	hunks    []*PatchHunk
 }
 
 func NewPatchGenerator(log *logrus.Entry, filename string, diffText string) *PatchGenerator {
 	return &PatchGenerator{
 		Log:      log,
 		filename: filename,
-		hunks:    getHunksFromDiff(diffText),
+		hunks:    GetHunksFromDiff(diffText),
 	}
 }
 
 func (d *PatchGenerator) GeneratePatch(firstLineIndex int, lastLineIndex int, reverse bool) string {
 	// step one is getting only those hunks which we care about
-	hunksInRange := []*patchHunk{}
+	hunksInRange := []*PatchHunk{}
 	for _, hunk := range d.hunks {
-		if hunk.lastLineIndex >= firstLineIndex && hunk.firstLineIndex <= lastLineIndex {
+		if hunk.LastLineIndex >= firstLineIndex && hunk.FirstLineIndex <= lastLineIndex {
 			hunksInRange = append(hunksInRange, hunk)
 		}
 	}
