@@ -23,6 +23,7 @@ import (
 	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/commands"
 	"github.com/jesseduffield/lazygit/pkg/config"
+	"github.com/jesseduffield/lazygit/pkg/git"
 	"github.com/jesseduffield/lazygit/pkg/i18n"
 	"github.com/jesseduffield/lazygit/pkg/theme"
 	"github.com/jesseduffield/lazygit/pkg/updates"
@@ -84,8 +85,7 @@ type Gui struct {
 // with mismatches of data. We might change this in the future
 type stagingPanelState struct {
 	SelectedLine       int
-	StageableLines     []int
-	HunkStarts         []int
+	PatchParser        *git.PatchParser
 	Diff               string
 	SelectingLineRange bool
 	SelectingHunk      bool

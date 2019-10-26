@@ -4,7 +4,6 @@ import (
 	"io/ioutil"
 	"strings"
 
-	"github.com/fatih/color"
 	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/git"
 	"github.com/jesseduffield/lazygit/pkg/utils"
@@ -35,20 +34,14 @@ func (gui *Gui) refreshStagingPanel() error {
 		return gui.handleStagingEscape(gui.g, nil)
 	}
 
-	// parse the diff and store the line numbers of hunks and stageable lines
-	// TODO: maybe instantiate this at application start
-	p, err := git.NewPatchParser(gui.Log)
-	if err != nil {
-		return nil
-	}
-	hunkStarts, stageableLines, err := p.ParsePatch(diff)
+	patchParser, err := git.NewPatchParser(gui.Log, diff)
 	if err != nil {
 		return nil
 	}
 
 	var selectedLine int
 	if gui.State.Panels.Staging != nil {
-		end := len(stageableLines) - 1
+		end := len(patchParser.StageableLines) - 1
 		if end < gui.State.Panels.Staging.SelectedLine {
 			selectedLine = end
 		} else {
@@ -58,17 +51,18 @@ func (gui *Gui) refreshStagingPanel() error {
 		selectedLine = 0
 	}
 
-	if len(stageableLines) == 0 {
+	if len(patchParser.StageableLines) == 0 {
 		return gui.handleStagingEscape(gui.g, nil)
 	}
 
 	gui.State.Panels.Staging = &stagingPanelState{
-		StageableLines: stageableLines,
-		HunkStarts:     hunkStarts,
-		SelectedLine:   selectedLine,
-		FirstLine:      stageableLines[selectedLine],
-		LastLine:       stageableLines[selectedLine],
-		Diff:           diff,
+		PatchParser:        patchParser,
+		SelectedLine:       selectedLine,
+		SelectingLineRange: false,
+		SelectingHunk:      false,
+		FirstLine:          patchParser.StageableLines[selectedLine],
+		LastLine:           patchParser.StageableLines[selectedLine],
+		Diff:               diff,
 	}
 
 	if err := gui.refreshView(); err != nil {
@@ -84,39 +78,6 @@ func (gui *Gui) refreshStagingPanel() error {
 	})
 
 	return nil
-}
-
-func (gui *Gui) renderView(diff string, firstLine int, lastLine int) string {
-	diffLines := strings.Split(diff, "\n")
-	newLines := []string{}
-	for index, line := range diffLines {
-		var attr color.Attribute
-
-		if len(line) == 0 {
-			newLines = append(newLines, line)
-			continue
-		}
-
-		switch line[:1] {
-		case "+":
-			attr = color.FgGreen
-		case "-":
-			attr = color.FgRed
-		case "@":
-			attr = color.FgCyan
-		default:
-			attr = color.FgWhite // TODO: use theme default here
-		}
-
-		var cl *color.Color
-		if index >= firstLine && index <= lastLine {
-			cl = color.New(attr, color.BgBlue)
-		} else {
-			cl = color.New(attr)
-		}
-		newLines = append(newLines, utils.ColoredStringDirect(line, cl))
-	}
-	return strings.Join(newLines, "\n")
 }
 
 func (gui *Gui) handleStagingEscape(g *gocui.Gui, v *gocui.View) error {
@@ -143,9 +104,9 @@ func (gui *Gui) handleStagingNextHunk(g *gocui.Gui, v *gocui.View) error {
 
 func (gui *Gui) handleCycleHunk(prev bool) error {
 	state := gui.State.Panels.Staging
-	lineNumbers := state.StageableLines
+	lineNumbers := state.PatchParser.StageableLines
 	currentLine := lineNumbers[state.SelectedLine]
-	currentHunkIndex := utils.PrevIndex(state.HunkStarts, currentLine)
+	currentHunkIndex := utils.PrevIndex(state.PatchParser.HunkStarts, currentLine)
 	var newHunkIndex int
 	if prev {
 		if currentHunkIndex == 0 {
@@ -153,13 +114,13 @@ func (gui *Gui) handleCycleHunk(prev bool) error {
 		}
 		newHunkIndex = currentHunkIndex - 1
 	} else {
-		if currentHunkIndex == len(state.HunkStarts)-1 {
+		if currentHunkIndex == len(state.PatchParser.HunkStarts)-1 {
 			return nil
 		}
 		newHunkIndex = currentHunkIndex + 1
 	}
 
-	state.SelectedLine = utils.NextIndex(lineNumbers, state.HunkStarts[newHunkIndex])
+	state.SelectedLine = utils.NextIndex(lineNumbers, state.PatchParser.HunkStarts[newHunkIndex])
 
 	return gui.refreshView()
 }
@@ -169,7 +130,7 @@ func (gui *Gui) handleCycleLine(prev bool) error {
 
 	if state.SelectingHunk {
 		if prev {
-			if state.FirstLine == state.HunkStarts[0] {
+			if state.FirstLine == state.PatchParser.HunkStarts[0] {
 				return nil
 			}
 			state.FirstLine, state.LastLine = gui.getHunkRange(state.FirstLine - 1)
@@ -182,7 +143,7 @@ func (gui *Gui) handleCycleLine(prev bool) error {
 		}
 
 		// get first stageable line in hunk to set as the selectedLine
-		for index, lineIdx := range state.StageableLines {
+		for index, lineIdx := range state.PatchParser.StageableLines {
 			if lineIdx >= state.FirstLine {
 				state.SelectedLine = index
 				break
@@ -192,7 +153,7 @@ func (gui *Gui) handleCycleLine(prev bool) error {
 		return gui.refreshView()
 	}
 
-	lineNumbers := state.StageableLines
+	lineNumbers := state.PatchParser.StageableLines
 	currentLine := lineNumbers[state.SelectedLine]
 	var newIndex int
 	if prev {
@@ -226,7 +187,7 @@ func (gui *Gui) diffLength() int {
 func (gui *Gui) refreshView() error {
 	state := gui.State.Panels.Staging
 
-	colorDiff := gui.renderView(state.Diff, state.FirstLine, state.LastLine)
+	colorDiff := state.PatchParser.Render(state.FirstLine, state.LastLine)
 
 	mainView := gui.getMainView()
 	mainView.Highlight = true
@@ -245,7 +206,7 @@ func (gui *Gui) focusLineAndHunk() error {
 	stagingView := gui.getMainView()
 	state := gui.State.Panels.Staging
 
-	lineNumber := state.StageableLines[state.SelectedLine]
+	lineNumber := state.PatchParser.StageableLines[state.SelectedLine]
 
 	_, viewHeight := stagingView.Size()
 	bufferHeight := viewHeight - 1
@@ -274,17 +235,17 @@ func (gui *Gui) focusLineAndHunk() error {
 	// // of the hunk, but if the hunk is too big we'll just go three lines beyond
 	// // the currently selected line so that the user can see the context
 	// var bottomLine int
-	// nextHunkStartIndex := utils.NextIndex(state.HunkStarts, lineNumber)
+	// nextHunkStartIndex := utils.NextIndex(state.PatchParser.HunkStarts, lineNumber)
 	// if nextHunkStartIndex == 0 {
 	// 	// for now linesHeight is an efficient means of getting the number of lines
 	// 	// in the patch. However if we introduce word wrap we'll need to update this
 	// 	bottomLine = stagingView.LinesHeight() - 1
 	// } else {
-	// 	bottomLine = state.HunkStarts[nextHunkStartIndex] - 1
+	// 	bottomLine = state.PatchParser.HunkStarts[nextHunkStartIndex] - 1
 	// }
 
-	// hunkStartIndex := utils.PrevIndex(state.HunkStarts, lineNumber)
-	// hunkStart := state.HunkStarts[hunkStartIndex]
+	// hunkStartIndex := utils.PrevIndex(state.PatchParser.HunkStarts, lineNumber)
+	// hunkStart := state.PatchParser.HunkStarts[hunkStartIndex]
 	// // if it's the first hunk we'll also show the diff header
 	// if hunkStartIndex == 0 {
 	// 	hunkStart = 0
@@ -342,7 +303,7 @@ func (gui *Gui) applySelection(reverse bool) error {
 
 func (gui *Gui) handleToggleSelectRange(g *gocui.Gui, v *gocui.View) error {
 	state := gui.State.Panels.Staging
-	lineNumber := state.StageableLines[state.SelectedLine]
+	lineNumber := state.PatchParser.StageableLines[state.SelectedLine]
 	state.SelectingLineRange = !state.SelectingLineRange
 	state.SelectingHunk = false
 	state.FirstLine = lineNumber
@@ -356,7 +317,7 @@ func (gui *Gui) handleToggleSelectHunk(g *gocui.Gui, v *gocui.View) error {
 
 	state.SelectingHunk = !state.SelectingHunk
 	state.SelectingLineRange = false
-	lineNumber := state.StageableLines[state.SelectedLine]
+	lineNumber := state.PatchParser.StageableLines[state.SelectedLine]
 
 	// if we're no longer selecting a hunk, reset the line number and refresh
 	if !state.SelectingHunk {
@@ -373,13 +334,13 @@ func (gui *Gui) getHunkRange(lineNumber int) (int, int) {
 
 	hunkStart := -1
 	hunkEnd := -1
-	for index, start := range state.HunkStarts {
+	for index, start := range state.PatchParser.HunkStarts {
 		if lineNumber < start {
 			continue
 		} else {
 			hunkStart = start
-			if len(state.HunkStarts) > index+1 {
-				hunkEnd = state.HunkStarts[index+1] - 1
+			if len(state.PatchParser.HunkStarts) > index+1 {
+				hunkEnd = state.PatchParser.HunkStarts[index+1] - 1
 			} else {
 				hunkEnd = gui.diffLength()
 			}
