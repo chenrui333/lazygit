@@ -91,6 +91,7 @@ type stagingPanelState struct {
 	SelectingHunk      bool
 	FirstLine          int
 	LastLine           int
+	IndexFocused       bool // this is for if we show the left or right panel
 }
 
 // type stagingPanelSplit struct {
@@ -376,7 +377,6 @@ func (gui *Gui) layout(g *gocui.Gui) error {
 	}
 
 	optionsVersionBoundary := width - max(len(utils.Decolorise(information)), 1)
-	leftSideWidth := width / 3
 
 	appStatus := gui.statusManager.getStatusString()
 	appStatusOptionsBoundary := 0
@@ -393,12 +393,23 @@ func (gui *Gui) layout(g *gocui.Gui) error {
 	g.DeleteView("limit")
 
 	textColor := theme.GocuiDefaultTextColor
+	leftSideWidth := width / 3
 	panelSplitX := width - 1
 	if gui.State.SplitMainPanel {
-		panelSplitX = 2 * width / 3
+		units := 7
+		leftSideWidth = width / units
+		panelSplitX = (1 + ((units - 1) / 2)) * width / units
 	}
 
-	v, err := g.SetView("main", leftSideWidth+panelSpacing, 0, panelSplitX, height-2, gocui.LEFT)
+	main := "main"
+	secondary := "secondary"
+	swappingMainPanels := gui.State.Panels.Staging != nil && gui.State.Panels.Staging.IndexFocused
+	if swappingMainPanels {
+		main = "secondary"
+		secondary = "main"
+	}
+
+	v, err := g.SetView(main, leftSideWidth+panelSpacing, 0, panelSplitX, height-2, gocui.LEFT)
 	if err != nil {
 		if err.Error() != "unknown view" {
 			return err
@@ -412,14 +423,14 @@ func (gui *Gui) layout(g *gocui.Gui) error {
 	if !gui.State.SplitMainPanel {
 		hiddenViewOffset = 9999
 	}
-	mainRight, err := g.SetView("mainRight", panelSplitX+1+hiddenViewOffset, hiddenViewOffset, width-1+hiddenViewOffset, height-2+hiddenViewOffset, gocui.LEFT)
+	secondaryView, err := g.SetView(secondary, panelSplitX+1+hiddenViewOffset, hiddenViewOffset, width-1+hiddenViewOffset, height-2+hiddenViewOffset, gocui.LEFT)
 	if err != nil {
 		if err.Error() != "unknown view" {
 			return err
 		}
-		mainRight.Title = gui.Tr.SLocalize("DiffTitle")
-		mainRight.Wrap = true
-		mainRight.FgColor = gocui.ColorWhite
+		secondaryView.Title = gui.Tr.SLocalize("DiffTitle")
+		secondaryView.Wrap = true
+		secondaryView.FgColor = gocui.ColorWhite
 	}
 
 	if v, err := g.SetView("status", 0, 0, leftSideWidth, vHeights["status"]-1, gocui.BOTTOM|gocui.RIGHT); err != nil {

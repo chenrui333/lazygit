@@ -698,6 +698,12 @@ func (gui *Gui) GetContextMap() map[string]map[string][]*Binding {
 					Modifier:    gocui.ModNone,
 					Handler:     gui.handleToggleSelectHunk,
 					Description: gui.Tr.SLocalize("ToggleSelectHunk"),
+				}, {
+					ViewName:    "main",
+					Key:         gocui.KeyTab,
+					Modifier:    gocui.ModNone,
+					Handler:     gui.handleTogglePanel,
+					Description: gui.Tr.SLocalize("TogglePanel"),
 				},
 			},
 			"merging": {

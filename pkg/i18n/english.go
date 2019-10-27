@@ -482,7 +482,7 @@ func addEnglish(i18nObject *i18n.Bundle) error {
 			Other: `stage individual hunks/lines`,
 		}, &i18n.Message{
 			ID:    "FileStagingRequirements",
-			Other: `Can only stage individual lines for tracked files with unstaged changes`,
+			Other: `Can only stage individual lines for tracked files`,
 		}, &i18n.Message{
 			ID:    "SelectHunk",
 			Other: `select hunk`,
@@ -498,6 +498,14 @@ func addEnglish(i18nObject *i18n.Bundle) error {
 		}, &i18n.Message{
 			ID:    "ToggleSelectHunk",
 			Other: `toggle select hunk`,
+		},
+		&i18n.Message{
+			ID:    "TogglePanel",
+			Other: `toggle staged/unstaged panel focus`,
+		},
+		&i18n.Message{
+			ID:    "CantStageStaged",
+			Other: `You can't stage an already staged change!`,
 		}, &i18n.Message{
 			ID:    "EscapeStaging",
 			Other: `return to files panel`,

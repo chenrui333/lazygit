@@ -88,14 +88,14 @@ func (gui *Gui) handleFileSelect(g *gocui.Gui, v *gocui.View, alreadySelected bo
 
 	if alreadySelected {
 		g.Update(func(*gocui.Gui) error {
-			if err := gui.setViewContent(gui.g, gui.getMainRightView(), contentCached); err != nil {
+			if err := gui.setViewContent(gui.g, gui.getSecondaryView(), contentCached); err != nil {
 				return err
 			}
 			return gui.setViewContent(gui.g, gui.getMainView(), leftContent)
 		})
 		return nil
 	}
-	if err := gui.renderString(g, "mainRight", contentCached); err != nil {
+	if err := gui.renderString(g, "secondary", contentCached); err != nil {
 		return err
 	}
 	return gui.renderString(g, "main", leftContent)
@@ -199,9 +199,9 @@ func (gui *Gui) handleEnterFile(g *gocui.Gui, v *gocui.View) error {
 	if file.HasInlineMergeConflicts {
 		return gui.handleSwitchToMerge(g, v)
 	}
-	// if !file.HasUnstagedChanges || file.HasMergeConflicts {
-	// 	return gui.createErrorPanel(g, gui.Tr.SLocalize("FileStagingRequirements"))
-	// }
+	if file.HasMergeConflicts {
+		return gui.createErrorPanel(g, gui.Tr.SLocalize("FileStagingRequirements"))
+	}
 	if err := gui.changeContext("main", "staging"); err != nil {
 		return err
 	}

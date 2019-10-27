@@ -300,8 +300,8 @@ func (gui *Gui) getMainView() *gocui.View {
 	return v
 }
 
-func (gui *Gui) getMainRightView() *gocui.View {
-	v, _ := gui.g.View("mainRight")
+func (gui *Gui) getSecondaryView() *gocui.View {
+	v, _ := gui.g.View("secondary")
 	return v
 }
 

@@ -2,12 +2,15 @@ package gui
 
 import (
 	"io/ioutil"
+	"strings"
 
 	"github.com/jesseduffield/gocui"
 	"github.com/jesseduffield/lazygit/pkg/git"
 )
 
 func (gui *Gui) refreshStagingPanel() error {
+	state := gui.State.Panels.Staging
+
 	file, err := gui.getSelectedFile(gui.g)
 	if err != nil {
 		if err != gui.Errors.ErrNoFiles {
@@ -16,20 +19,38 @@ func (gui *Gui) refreshStagingPanel() error {
 		return gui.handleStagingEscape(gui.g, nil)
 	}
 
-	// plan: have two tabs: one for working tree diff, one for index. If you select a new file and it's staged, we should select the index tab, otherwise the working tree tab. Once you've added everything to the working tree tab we should switch to the index tab. Ideally we would show everything that's important on the one screen but I doubt git would make that easy. Seeing the two side by side could be good but would require a lot of screen space
-
 	gui.State.SplitMainPanel = true
 
-	if !file.HasUnstagedChanges {
+	indexFocused := false
+	if state != nil {
+		indexFocused = state.IndexFocused
+	}
+
+	if !file.HasUnstagedChanges && !file.HasStagedChanges {
 		return gui.handleStagingEscape(gui.g, nil)
 	}
 
-	// note for custom diffs, we'll need to send a flag here saying not to use the custom diff
-	diff := gui.GitCommand.Diff(file, true, false)
-	colorDiffCached := gui.GitCommand.Diff(file, false, true)
+	if (indexFocused && !file.HasStagedChanges) || (!indexFocused && !file.HasUnstagedChanges) {
+		indexFocused = !indexFocused
+	}
 
-	if len(diff) < 2 {
-		return gui.handleStagingEscape(gui.g, nil)
+	getDiffs := func() (string, string) {
+		// note for custom diffs, we'll need to send a flag here saying not to use the custom diff
+		diff := gui.GitCommand.Diff(file, true, indexFocused)
+		secondaryColorDiff := gui.GitCommand.Diff(file, false, !indexFocused)
+		return diff, secondaryColorDiff
+	}
+
+	diff, secondaryColorDiff := getDiffs()
+
+	// if we have e.g. a deleted file with nothing else to the diff will have only
+	// 4-5 lines in which case we'll swap panels
+	if len(strings.Split(diff, "\n")) < 5 {
+		if len(strings.Split(secondaryColorDiff, "\n")) < 5 {
+			return gui.handleStagingEscape(gui.g, nil)
+		}
+		indexFocused = !indexFocused
+		diff, secondaryColorDiff = getDiffs()
 	}
 
 	patchParser, err := git.NewPatchParser(gui.Log, diff)
@@ -45,7 +66,6 @@ func (gui *Gui) refreshStagingPanel() error {
 	var firstLine int
 	var lastLine int
 	selectingHunk := false
-	state := gui.State.Panels.Staging
 	if state != nil {
 		if state.SelectingHunk {
 			// this is tricky: we need to find out which hunk we just staged based on our old `state.PatchParser` (as opposed to the new `patchParser`)
@@ -74,21 +94,33 @@ func (gui *Gui) refreshStagingPanel() error {
 		FirstLine:          firstLine,
 		LastLine:           lastLine,
 		Diff:               diff,
+		IndexFocused:       indexFocused,
 	}
 
 	if err := gui.refreshView(); err != nil {
 		return err
 	}
 
-	mainRightView := gui.getMainRightView()
-	mainRightView.Highlight = true
-	mainRightView.Wrap = false
+	if err := gui.focusSelection(selectingHunk); err != nil {
+		return err
+	}
+
+	secondaryView := gui.getSecondaryView()
+	secondaryView.Highlight = true
+	secondaryView.Wrap = false
 
 	gui.g.Update(func(*gocui.Gui) error {
-		return gui.setViewContent(gui.g, gui.getMainRightView(), colorDiffCached)
+		return gui.setViewContent(gui.g, gui.getSecondaryView(), secondaryColorDiff)
 	})
 
 	return nil
+}
+
+func (gui *Gui) handleTogglePanel(g *gocui.Gui, v *gocui.View) error {
+	state := gui.State.Panels.Staging
+
+	state.IndexFocused = !state.IndexFocused
+	return gui.refreshStagingPanel()
 }
 
 func (gui *Gui) handleStagingEscape(g *gocui.Gui, v *gocui.View) error {
@@ -232,6 +264,10 @@ func (gui *Gui) handleResetSelection(g *gocui.Gui, v *gocui.View) error {
 func (gui *Gui) applySelection(reverse bool) error {
 	state := gui.State.Panels.Staging
 
+	if !reverse && state.IndexFocused {
+		return gui.createErrorPanel(gui.g, gui.Tr.SLocalize("CantStageStaged"))
+	}
+
 	file, err := gui.getSelectedFile(gui.g)
 	if err != nil {
 		return err
@@ -248,7 +284,7 @@ func (gui *Gui) applySelection(reverse bool) error {
 
 	// apply the patch then refresh this panel
 	// create a new temp file with the patch, then call git apply with that patch
-	_, err = gui.GitCommand.ApplyPatch(patch, false, !reverse)
+	_, err = gui.GitCommand.ApplyPatch(patch, false, !reverse || state.IndexFocused)
 	if err != nil {
 		return err
 	}
